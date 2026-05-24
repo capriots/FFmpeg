@@ -3567,6 +3567,13 @@ static const AVCodecDescriptor codec_descriptors[] = {
         .long_name = NULL_IF_CONFIG_SMALL("CRI AHX"),
         .props     = AV_CODEC_PROP_INTRA_ONLY | AV_CODEC_PROP_LOSSY,
     },
+    {
+        .id        = AV_CODEC_ID_ATRAC3P_ATS,
+        .type      = AVMEDIA_TYPE_AUDIO,
+        .name      = "atrac3plus_ats",
+        .long_name = NULL_IF_CONFIG_SMALL("ATRAC3+ ATS (Adaptive TRansform Acoustic Coding 3+ ATS Syntax)"),
+        .props     = AV_CODEC_PROP_INTRA_ONLY | AV_CODEC_PROP_LOSSY,
+    },
 
     /* subtitle codecs */
     {

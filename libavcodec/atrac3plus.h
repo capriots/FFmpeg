@@ -48,6 +48,10 @@
 /** Global constants */
 #define ATRAC3P_POWER_COMP_OFF  15  ///< disable power compensation
 
+/** ATS header constants */
+#define ATRAC3P_ATS_SYNC_WORD    0x0fd0
+#define ATRAC3P_ATS_HEADER_SIZE  8
+
 /** ATRAC3+ channel unit types */
 enum Atrac3pChannelUnitTypes {
     CH_UNIT_MONO       = 0, ///< unit containing one coded channel

@@ -456,6 +456,7 @@ extern const FFCodec ff_atrac3_decoder;
 extern const FFCodec ff_atrac3al_decoder;
 extern const FFCodec ff_atrac3p_decoder;
 extern const FFCodec ff_atrac3pal_decoder;
+extern const FFCodec ff_atrac3p_ats_decoder;
 extern const FFCodec ff_atrac9_decoder;
 extern const FFCodec ff_binkaudio_dct_decoder;
 extern const FFCodec ff_binkaudio_rdft_decoder;

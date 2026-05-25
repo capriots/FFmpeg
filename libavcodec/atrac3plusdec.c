@@ -2,6 +2,7 @@
  * ATRAC3+ compatible decoder
  *
  * Copyright (c) 2010-2013 Maxim Poliakovski
+ * Copyright (c) 2026 Simon Capriotti
  *
  * This file is part of FFmpeg.
  *
@@ -25,7 +26,9 @@
  * Sony ATRAC3+ compatible decoder.
  *
  * Container formats used to store its data:
- * RIFF WAV (.at3) and Sony OpenMG (.oma, .aa3).
+ * RIFF WAV (.at3, .atx), Sony OpenMG (.oma, .aa3),
+ * and MPEG-PS (PSP Movie Format (for UMD Video): .mps,
+ * PSP Movie Format (for games): .pmf, PlayStation Advanced Movie Format: .pam)
  *
  * Technical description of this codec can be found here:
  * http://wiki.multimedia.cx/index.php?title=ATRAC3plus
@@ -33,6 +36,8 @@
  * Kudos to Benjamin Larsson and Michael Karcher
  * for their precious technical help!
  */
+
+#include "config_components.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -207,14 +212,16 @@ static av_cold int atrac3p_decode_init(AVCodecContext *avctx)
     float scale;
     int ret;
 
-    if (!avctx->block_align) {
-        av_log(avctx, AV_LOG_ERROR, "block_align is not set\n");
-        return AVERROR(EINVAL);
-    }
+    if (avctx->codec_id != AV_CODEC_ID_ATRAC3P_ATS) {
+        if (!avctx->block_align) {
+            av_log(avctx, AV_LOG_ERROR, "block_align is not set\n");
+            return AVERROR(EINVAL);
+        }
 
-    ret = init_ch_units(ctx, avctx);
-    if (ret < 0)
-        return ret;
+        ret = init_ch_units(ctx, avctx);
+        if (ret < 0)
+            return ret;
+    }
 
     /* initialize IPQF */
     scale = 32.0 / 32768.0;
@@ -429,7 +436,9 @@ static int atrac3p_decode_frame(AVCodecContext *avctx, AVFrame *frame,
 
     *got_frame_ptr = 1;
 
-    return avctx->codec_id == AV_CODEC_ID_ATRAC3P ? FFMIN(avctx->block_align, avpkt->size) : avpkt->size;
+    return avctx->codec_id == AV_CODEC_ID_ATRAC3P ? FFMIN(avctx->block_align, avpkt->size) :
+           avctx->codec_id == AV_CODEC_ID_ATRAC3P_ATS ? FFMIN(avctx->block_align - ATRAC3P_ATS_HEADER_SIZE, avpkt->size) :
+           avpkt->size;
 }
 
 const FFCodec ff_atrac3p_decoder = {
@@ -457,3 +466,64 @@ const FFCodec ff_atrac3pal_decoder = {
     .close          = atrac3p_decode_close,
     FF_CODEC_DECODE_CB(atrac3p_decode_frame),
 };
+
+#if CONFIG_ATRAC3P_ATS_DECODER
+
+#include "atrac3plus_ats_parser.h"
+
+typedef struct ATRAC3PATSContext {
+    ATRAC3PContext atrac3p_ctx;
+    uint64_t prev_header;
+} ATRAC3PATSContext;
+
+static int atrac3p_ats_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+                                    int *got_frame_ptr, AVPacket *avpkt)
+{
+    ATRAC3PATSContext *const ctx = avctx->priv_data;
+
+    if (avpkt->size < ATRAC3P_ATS_HEADER_SIZE) {
+        av_log(avctx, AV_LOG_ERROR, "Packet too small!\n");
+        return AVERROR_INVALIDDATA;
+    }
+
+    const uint64_t ats_header = AV_RB64(avpkt->data);
+    if (ats_header != ctx->prev_header) {
+        Atrac3pAtsDownmixLevels downmix_levels;
+
+        int ret = ff_atrac3p_ats_parse_header(avpkt->data, avpkt->size, avctx, &downmix_levels);
+        if (ret < 0)
+            return ret;
+
+        av_freep(&ctx->atrac3p_ctx.ch_units);
+        ret = init_ch_units(&ctx->atrac3p_ctx, avctx);
+        if (ret < 0)
+            return ret;
+
+        if (downmix_levels.front_downmix_level || downmix_levels.center_downmix_level ||
+            downmix_levels.back_downmix_level || downmix_levels.lfe_downmix_level ||
+            downmix_levels.side_downmix_level)
+            avpriv_report_missing_feature(avctx, "Downmixing");
+
+        ctx->prev_header = ats_header;
+    }
+
+    avpkt->data += ATRAC3P_ATS_HEADER_SIZE;
+    avpkt->size -= ATRAC3P_ATS_HEADER_SIZE;
+
+    return atrac3p_decode_frame(avctx, frame, got_frame_ptr, avpkt);
+}
+
+const FFCodec ff_atrac3p_ats_decoder = {
+    .p.name         = "atrac3plus_ats",
+    CODEC_LONG_NAME("ATRAC3+ ATS (Adaptive TRansform Acoustic Coding 3+ ATS syntax)"),
+    .p.type         = AVMEDIA_TYPE_AUDIO,
+    .p.id           = AV_CODEC_ID_ATRAC3P_ATS,
+    .p.capabilities = AV_CODEC_CAP_CHANNEL_CONF | AV_CODEC_CAP_DR1,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .priv_data_size = sizeof(ATRAC3PATSContext),
+    .init           = atrac3p_decode_init,
+    .close          = atrac3p_decode_close,
+    FF_CODEC_DECODE_CB(atrac3p_ats_decode_frame),
+};
+
+#endif

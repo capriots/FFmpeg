@@ -599,6 +599,7 @@ static int get_audio_frame_duration(enum AVCodecID id, int sr, int ch, int ba,
         if (framecount > INT_MAX/1024)
             return 0;
         return 1024 * framecount;
+    case AV_CODEC_ID_ATRAC3P_ATS:
     case AV_CODEC_ID_ATRAC3P:      return 2048;
     case AV_CODEC_ID_MP2:
     case AV_CODEC_ID_MUSEPACK7:    return 1152;

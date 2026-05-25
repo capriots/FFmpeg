@@ -169,40 +169,16 @@ static av_cold void atrac3p_init_static(void)
     ff_atrac3p_init_dsp_static();
 }
 
-static av_cold int atrac3p_decode_init(AVCodecContext *avctx)
+static av_cold int init_ch_units(ATRAC3PContext *ctx, AVCodecContext *avctx)
 {
-    static AVOnce init_static_once = AV_ONCE_INIT;
-    ATRAC3PContext *ctx = avctx->priv_data;
-    float scale;
     int i, ch, ret;
-
-    if (!avctx->block_align) {
-        av_log(avctx, AV_LOG_ERROR, "block_align is not set\n");
-        return AVERROR(EINVAL);
-    }
-
-    /* initialize IPQF */
-    scale = 32.0 / 32768.0;
-    ret = av_tx_init(&ctx->ipqf_dct_ctx, &ctx->ipqf_dct_fn, AV_TX_FLOAT_MDCT,
-                     1, 16, &scale, 0);
-    if (ret < 0)
-        return ret;
-
-    scale = -1.0f;
-    ret = av_tx_init(&ctx->mdct_ctx, &ctx->mdct_fn, AV_TX_FLOAT_MDCT,
-                     1, 128, &scale, AV_TX_FULL_IMDCT);
-    if (ret < 0)
-        return ret;
-
-    ff_atrac_init_gain_compensation(&ctx->gainc_ctx, 6, 2);
 
     if ((ret = set_channel_params(ctx, avctx)) < 0)
         return ret;
 
     ctx->ch_units = av_calloc(ctx->num_channel_blocks, sizeof(*ctx->ch_units));
-    ctx->fdsp = avpriv_float_dsp_alloc(avctx->flags & AV_CODEC_FLAG_BITEXACT);
 
-    if (!ctx->ch_units || !ctx->fdsp) {
+    if (!ctx->ch_units) {
         return AVERROR(ENOMEM);
     }
 
@@ -220,6 +196,45 @@ static av_cold int atrac3p_decode_init(AVCodecContext *avctx)
         ctx->ch_units[i].waves_info      = &ctx->ch_units[i].wave_synth_hist[0];
         ctx->ch_units[i].waves_info_prev = &ctx->ch_units[i].wave_synth_hist[1];
     }
+
+    return 0;
+}
+
+static av_cold int atrac3p_decode_init(AVCodecContext *avctx)
+{
+    static AVOnce init_static_once = AV_ONCE_INIT;
+    ATRAC3PContext *ctx = avctx->priv_data;
+    float scale;
+    int ret;
+
+    if (!avctx->block_align) {
+        av_log(avctx, AV_LOG_ERROR, "block_align is not set\n");
+        return AVERROR(EINVAL);
+    }
+
+    ret = init_ch_units(ctx, avctx);
+    if (ret < 0)
+        return ret;
+
+    /* initialize IPQF */
+    scale = 32.0 / 32768.0;
+    ret = av_tx_init(&ctx->ipqf_dct_ctx, &ctx->ipqf_dct_fn, AV_TX_FLOAT_MDCT,
+                     1, 16, &scale, 0);
+    if (ret < 0)
+        return ret;
+
+    scale = -1.0f;
+    ret = av_tx_init(&ctx->mdct_ctx, &ctx->mdct_fn, AV_TX_FLOAT_MDCT,
+                     1, 128, &scale, AV_TX_FULL_IMDCT);
+    if (ret < 0)
+        return ret;
+
+    ff_atrac_init_gain_compensation(&ctx->gainc_ctx, 6, 2);
+
+    ctx->fdsp = avpriv_float_dsp_alloc(avctx->flags & AV_CODEC_FLAG_BITEXACT);
+
+    if (!ctx->fdsp)
+        return AVERROR(ENOMEM);
 
     avctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
 

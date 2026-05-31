@@ -61,6 +61,10 @@
 
 #define STREAM_TYPE_AUDIO_AC3       0x81
 
+#define STREAM_TYPE_PSMF_AUDIO_PCM     0x80
+#define STREAM_TYPE_PSMF_AUDIO_ATRAC3P 0xdc
+#define STREAM_TYPE_PSMF_USER_DATA     0xdd
+
 static const int lpcm_freq_tab[4] = { 48000, 96000, 44100, 32000 };
 
 /**

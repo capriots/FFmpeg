@@ -33,6 +33,7 @@
 /* demux code */
 
 #define MAX_SYNC_SIZE 100000
+#define PSMF_PACK_SIZE_ALIGN 0x800
 
 static int check_pes(const uint8_t *p, const uint8_t *end)
 {
@@ -129,7 +130,17 @@ typedef struct MpegDemuxContext {
     int dvd;
     int imkh_cctv;
     int raw_ac3;
+    int psmf;
 } MpegDemuxContext;
+
+typedef struct PsmfVideoStreamContext {
+    uint8_t keyframe;
+    int keyframs_size;
+} PsmfVideoStreamContext;
+
+typedef struct PsmfAudioStreamContext {
+    uint8_t continuity;
+} PsmfAudioStreamContext;
 
 static int mpegps_read_header(AVFormatContext *s)
 {
@@ -267,6 +278,59 @@ redo:
         goto redo;
     }
     if (startcode == PRIVATE_STREAM_2) {
+        if (m->psmf) {
+            // private stream 2 is used as random access point information in PSMF streams
+
+            // uint16_t: stream id
+            // uint16_t * 4: offsets to the next four reference pictures (can be -1 if there are less than four ref pics in this GOP or 0 in unknown cases)
+            // uint8_t * 4: unknown
+            // uint16_t: size of following fields
+            // uint16_t: number of pictures in this GOP
+            // for each picture:
+            // 1st to 8th bits: unknown
+            // 9th bit: reference picture indicator
+            // 10th to 32nd bits: coded picture size (max should be 0x12a800 for M2V, 0xcc000 for AVC)
+
+            unsigned int len = avio_rb16(s->pb);
+            if (len < 22) {
+                av_log(s, AV_LOG_ERROR, "Invalid random access point info packet length\n");
+                return AVERROR_INVALIDDATA;
+            }
+
+            const unsigned int stream_id = avio_rb16(s->pb);
+            len -= 2;
+
+            if ((stream_id & PACKET_START_CODE_MASK) != PACKET_START_CODE_PREFIX ||
+                (stream_id & 0xf0) != VIDEO_ID) {
+                av_log(s, AV_LOG_ERROR, "Invalid stream id in random access point info packet (%X)\n",
+                       stream_id);
+                return AVERROR_INVALIDDATA;
+            }
+
+            avio_skip(s->pb, 16);
+            const int keyframe_size = avio_rb32(s->pb) & 0x7fffff;
+            len -= 20;
+
+            unsigned int i;
+            for (i = 0; i < s->nb_streams; i++)
+                if (stream_id == (unsigned int)s->streams[i]->id)
+                    break;
+
+            if (i >= s->nb_streams) {
+                av_log(s, AV_LOG_ERROR, "Invalid stream id in random access point info packet (%X)\n",
+                       stream_id);
+                return AVERROR_INVALIDDATA;
+            }
+
+            if (s->streams[i]->discard < AVDISCARD_ALL) {
+                PsmfVideoStreamContext *const ctx = s->streams[i]->priv_data;
+                ctx->keyframe = 1;
+                ctx->keyframs_size = keyframe_size;
+            }
+
+            avio_skip(s->pb, len);
+            goto redo;
+        }
         if (!m->sofdec) {
             /* Need to detect whether this from a DVD or a 'Sofdec' stream */
             int len = avio_rb16(s->pb);
@@ -462,7 +526,7 @@ redo:
     }
     if (len < 0)
         goto error_redo;
-    if (dts != AV_NOPTS_VALUE && ppos) {
+    if (dts != AV_NOPTS_VALUE && ppos && !m->psmf) {
         int i;
         for (i = 0; i < s->nb_streams; i++) {
             if (startcode == s->streams[i]->id &&
@@ -525,6 +589,11 @@ redo:
         st = s->streams[i];
         if (st->id == startcode)
             goto found;
+    }
+
+    if (m->psmf) {
+        av_log(s, AV_LOG_ERROR, "Unknown stream found (%X)\n", startcode);
+        goto redo;
     }
 
     es_type = m->psm_es_type[startcode & 0xff];
@@ -656,6 +725,64 @@ found:
             len -=6;
       }
     }
+
+    if (m->psmf) {
+        dummy_pos &= ~(PSMF_PACK_SIZE_ALIGN - 1);
+
+        switch (st->codecpar->codec_type) {
+        case AVMEDIA_TYPE_VIDEO: {
+            PsmfVideoStreamContext *const ctx = st->priv_data;
+
+            if (ctx->keyframe) {
+                if (dts == AV_NOPTS_VALUE || pts == AV_NOPTS_VALUE) {
+                    av_log(s, AV_LOG_ERROR, "Random access info packet wasn't"
+                           " immediately followed by the start of a new frame\n");
+                    return AVERROR_INVALIDDATA;
+                }
+
+                ff_reduce_index(s, st->index);
+                av_add_index_entry(st, dummy_pos, pts, ctx->keyframs_size, 0, AVINDEX_KEYFRAME);
+                ctx->keyframe = 0;
+            }
+            break;
+        }
+        case AVMEDIA_TYPE_AUDIO: {
+            PsmfAudioStreamContext *const ctx = st->priv_data;
+            const uint16_t next_frame_offset_mask =
+                st->codecpar->codec_id == AV_CODEC_ID_PCM_PAMF ? 0x7ff : 0xffff;
+            const uint16_t next_frame_offset =
+                avio_rb24(s->pb) & next_frame_offset_mask;
+
+            len -= 3;
+
+            if (!ctx->continuity) {
+                if (next_frame_offset == next_frame_offset_mask)
+                    goto skip;
+
+                if (next_frame_offset > len) {
+                    av_log(s, AV_LOG_ERROR, "Invalid next frame offset!\n");
+                    return AVERROR_INVALIDDATA;
+                }
+
+                avio_skip(s->pb, next_frame_offset);
+                len -= next_frame_offset;
+                ctx->continuity = 1;
+            }
+            break;
+        }
+        case AVMEDIA_TYPE_DATA:
+            avpriv_report_missing_feature(s, "User data stream demuxing");
+            avio_skip(s->pb, 1);
+            len--;
+
+            if (pts != AV_NOPTS_VALUE) { // start of new frame
+                avio_rb32(s->pb); // size of this frame in bytes
+                avio_skip(s->pb, 4);
+                len -= 8;
+            }
+        }
+    }
+
     ret = av_get_packet(s->pb, pkt, len);
 
     pkt->pts          = pts;
@@ -1071,4 +1198,8 @@ const FFInputFormat ff_vobsub_demuxer = {
     .read_seek2     = vobsub_read_seek,
     .read_close     = vobsub_read_close,
 };
+#endif
+
+#if CONFIG_PSMF_DEMUXER
+#include "psmf.h"
 #endif

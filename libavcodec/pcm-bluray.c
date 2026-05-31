@@ -122,7 +122,7 @@ static int pcm_bluray_parse_header(AVCodecContext *avctx,
     return 0;
 }
 
-static int pcm_bluray_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
                                    int *got_frame_ptr, AVPacket *avpkt)
 {
     const uint8_t *src = avpkt->data;
@@ -132,16 +132,6 @@ static int pcm_bluray_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     int sample_size, samples;
     int16_t *dst16;
     int32_t *dst32;
-
-    if (buf_size < 4) {
-        av_log(avctx, AV_LOG_ERROR, "PCM packet too small\n");
-        return AVERROR_INVALIDDATA;
-    }
-
-    if ((retval = pcm_bluray_parse_header(avctx, src)))
-        return retval;
-    src += 4;
-    buf_size -= 4;
 
     bytestream2_init(&gb, src, buf_size);
 
@@ -297,7 +287,25 @@ static int pcm_bluray_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     if (avctx->debug & FF_DEBUG_BITSTREAM)
         ff_dlog(avctx, "pcm_bluray_decode_frame: decoded %d -> %d bytes\n",
                 retval, buf_size);
-    return retval + 4;
+    return retval;
+}
+
+static int pcm_bluray_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+                                   int *got_frame_ptr, AVPacket *avpkt)
+{
+    int retval;
+
+    if (avpkt->size < 4) {
+        av_log(avctx, AV_LOG_ERROR, "PCM packet too small\n");
+        return AVERROR_INVALIDDATA;
+    }
+
+    if ((retval = pcm_bluray_parse_header(avctx, avpkt->data)))
+        return retval;
+
+    avpkt->data += 4;
+    avpkt->size -= 4;
+    return decode_frame(avctx, frame, got_frame_ptr, avpkt);
 }
 
 const FFCodec ff_pcm_bluray_decoder = {

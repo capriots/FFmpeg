@@ -1,6 +1,7 @@
 /*
- * LPCM codecs for PCM format found in Blu-ray PCM streams
+ * LPCM codecs for PCM format found in Blu-ray and PAMF PCM streams
  * Copyright (c) 2009, 2013 Christian Schmidt
+ * Copyright (c) 2026 Simon Capriotti
  *
  * This file is part of FFmpeg.
  *
@@ -21,14 +22,18 @@
 
 /**
  * @file
- * PCM codec for Blu-ray PCM audio tracks
+ * PCM codec for Blu-ray and PAMF PCM audio tracks
  */
+
+#include "config_components.h"
 
 #include "libavutil/channel_layout.h"
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_internal.h"
 #include "decode.h"
+
+#define PCM_BLURAY_FRAMES_PER_SEC 200
 
 /*
  * Channel Mapping according to
@@ -308,6 +313,7 @@ static int pcm_bluray_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     return decode_frame(avctx, frame, got_frame_ptr, avpkt);
 }
 
+#if CONFIG_PCM_BLURAY_DECODER
 const FFCodec ff_pcm_bluray_decoder = {
     .p.name         = "pcm_bluray",
     CODEC_LONG_NAME("PCM signed 16|20|24-bit big-endian for Blu-ray media"),
@@ -316,3 +322,71 @@ const FFCodec ff_pcm_bluray_decoder = {
     FF_CODEC_DECODE_CB(pcm_bluray_decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
 };
+#endif
+
+#if CONFIG_PCM_PAMF_DECODER
+
+static int pcm_pamf_init_decode(AVCodecContext *avctx)
+{
+    int ch_layout_mask;
+
+    if (avctx->sample_rate != 48000) {
+        av_log(avctx, AV_LOG_FATAL, "Invalid sample rate (%d)\n",
+               avctx->sample_rate);
+        return AVERROR(EINVAL);
+    }
+
+    switch (avctx->bits_per_coded_sample) {
+    case 16:
+        avctx->bits_per_raw_sample = 16;
+        avctx->sample_fmt = AV_SAMPLE_FMT_S16;
+        break;
+    case 24:
+        avctx->bits_per_raw_sample = 24;
+        avctx->sample_fmt = AV_SAMPLE_FMT_S32;
+        break;
+    default:
+        av_log(avctx, AV_LOG_FATAL, "Invalid sample depth (%d)\n",
+               avctx->bits_per_coded_sample);
+        return AVERROR(EINVAL);
+    }
+
+    switch (avctx->ch_layout.nb_channels) {
+    case 1:
+        ch_layout_mask = AV_CH_LAYOUT_MONO;
+        break;
+    case 2:
+        ch_layout_mask = AV_CH_LAYOUT_STEREO;
+        break;
+    case 6:
+        ch_layout_mask = AV_CH_LAYOUT_5POINT1;
+        break;
+    case 8:
+        ch_layout_mask = AV_CH_LAYOUT_7POINT1;
+        break;
+    default:
+        av_log(avctx, AV_LOG_FATAL, "Invalid channel count (%d)\n",
+               avctx->ch_layout.nb_channels);
+        return AVERROR(EINVAL);
+    }
+
+    av_channel_layout_uninit(&avctx->ch_layout);
+    av_channel_layout_from_mask(&avctx->ch_layout, ch_layout_mask);
+
+    avctx->bit_rate = FFALIGN(avctx->ch_layout.nb_channels, 2) * avctx->sample_rate *
+                      avctx->bits_per_coded_sample;
+    avctx->frame_size = avctx->sample_rate / PCM_BLURAY_FRAMES_PER_SEC;
+    return 0;
+}
+
+const FFCodec ff_pcm_pamf_decoder = {
+    .p.name         = "pcm_pamf",
+    CODEC_LONG_NAME("PCM signed 16|24-bit big-endian for PAMF streams"),
+    .p.type         = AVMEDIA_TYPE_AUDIO,
+    .p.id           = AV_CODEC_ID_PCM_PAMF,
+    .init           = pcm_pamf_init_decode,
+    FF_CODEC_DECODE_CB(decode_frame),
+    .p.capabilities = AV_CODEC_CAP_DR1,
+};
+
+#endif

@@ -87,6 +87,7 @@ extern const FFCodecParser ff_mpeg4video_parser;
 extern const FFCodecParser ff_mpegaudio_parser;
 extern const FFCodecParser ff_mpegvideo_parser;
 extern const FFCodecParser ff_opus_parser;
+extern const FFCodecParser ff_pcm_psmf_parser;
 extern const FFCodecParser ff_prores_parser;
 extern const FFCodecParser ff_png_parser;
 extern const FFCodecParser ff_pnm_parser;
